@@ -292,7 +292,7 @@ public class BackgroundHiveSplitLoader
                 FileInputFormat.setInputPaths(targetJob, targetPath);
                 InputSplit[] targetSplits = targetInputFormat.getSplits(targetJob, 0);
 
-                InternalHiveSplitFactory splitFactory = new InternalHiveSplitFactory(targetFilesystem, partitionName, inputFormat, schema, partitionKeys, effectivePredicate, partition.getColumnCoercions(), Optional.empty(), isForceLocalScheduling(session));
+                InternalHiveSplitFactory splitFactory = new InternalHiveSplitFactory(targetFilesystem, partitionName, inputFormat, schema, partitionKeys, effectivePredicate, Optional.empty(), isForceLocalScheduling(session), partition.getTableToPartitionMappings());
                 lastResult = addSplitsToSource(targetSplits, splitFactory);
                 if (stopped) {
                     return COMPLETED_FUTURE;
@@ -325,9 +325,9 @@ public class BackgroundHiveSplitLoader
                 schema,
                 partitionKeys,
                 effectivePredicate,
-                partition.getColumnCoercions(),
                 bucketConversionRequiresWorkerParticipation ? bucketConversion : Optional.empty(),
-                isForceLocalScheduling(session));
+                isForceLocalScheduling(session),
+                partition.getTableToPartitionMappings());
 
         // To support custom input formats, we want to call getSplits()
         // on the input format to obtain file splits.
@@ -432,6 +432,7 @@ public class BackgroundHiveSplitLoader
         // convert files internal splits
         List<InternalHiveSplit> splitList = new ArrayList<>();
         for (int bucketNumber = 0; bucketNumber < Math.max(tableBucketCount, partitionBucketCount); bucketNumber++) {
+            // TODO Check one is a multiple of the other
             int partitionBucketNumber = bucketNumber % partitionBucketCount; // physical
             int tableBucketNumber = bucketNumber % tableBucketCount; // logical
             if (bucketSplitInfo.isBucketEnabled(tableBucketNumber)) {

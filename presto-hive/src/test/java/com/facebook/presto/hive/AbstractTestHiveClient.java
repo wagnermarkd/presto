@@ -3657,16 +3657,13 @@ public abstract class AbstractTestHiveClient
 
     protected static void assertPageSourceType(ConnectorPageSource pageSource, HiveStorageFormat hiveStorageFormat)
     {
-        if (pageSource instanceof RecordPageSource) {
-            RecordCursor hiveRecordCursor = ((RecordPageSource) pageSource).getCursor();
-            hiveRecordCursor = ((HiveRecordCursor) hiveRecordCursor).getRegularColumnRecordCursor();
-            if (hiveRecordCursor instanceof HiveCoercionRecordCursor) {
-                hiveRecordCursor = ((HiveCoercionRecordCursor) hiveRecordCursor).getRegularColumnRecordCursor();
-            }
-            assertInstanceOf(hiveRecordCursor, recordCursorType(hiveStorageFormat), hiveStorageFormat.name());
+        ConnectorPageSource innerSource = ((HivePartitionAdapatingPageSource) pageSource).getPageSource();
+        if (innerSource instanceof RecordPageSource) {
+            RecordCursor recordCursor = ((RecordPageSource) innerSource).getCursor();
+            assertInstanceOf(recordCursor, recordCursorType(hiveStorageFormat), hiveStorageFormat.name());
         }
         else {
-            assertInstanceOf(((HivePageSource) pageSource).getPageSource(), pageSourceType(hiveStorageFormat), hiveStorageFormat.name());
+            assertInstanceOf(innerSource, pageSourceType(hiveStorageFormat), hiveStorageFormat.name());
         }
     }
 

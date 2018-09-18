@@ -242,9 +242,9 @@ public class TestBackgroundHiveSplitLoader
         List<HivePartitionMetadata> hivePartitionMetadatas =
                 ImmutableList.of(
                         new HivePartitionMetadata(
-                                new HivePartition(new SchemaTableName("testSchema", "table_name")),
+                                table, new HivePartition(new SchemaTableName("testSchema", "table_name")),
                                 Optional.empty(),
-                                ImmutableMap.of()));
+                                TableToPartitionMappings.createIdentityMapping(table)));
 
         ConnectorSession connectorSession = new TestingConnectorSession(
                 new HiveSessionProperties(new HiveClientConfig().setMaxSplitSize(new DataSize(1.0, GIGABYTE)), new OrcFileWriterConfig()).getSessionProperties());
@@ -270,7 +270,7 @@ public class TestBackgroundHiveSplitLoader
 
         return new BackgroundHiveSplitLoader(
                 SIMPLE_TABLE,
-                createPartitionMetadataWithOfflinePartitions(),
+                createPartitionMetadataWithOfflinePartitions(SIMPLE_TABLE),
                 TupleDomain.all(),
                 createBucketSplitInfo(Optional.empty(), Optional.empty()),
                 connectorSession,
@@ -282,7 +282,7 @@ public class TestBackgroundHiveSplitLoader
                 false);
     }
 
-    private static Iterable<HivePartitionMetadata> createPartitionMetadataWithOfflinePartitions()
+    private static Iterable<HivePartitionMetadata> createPartitionMetadataWithOfflinePartitions(Table table)
             throws RuntimeException
     {
         return () -> new AbstractIterator<HivePartitionMetadata>()
@@ -298,9 +298,9 @@ public class TestBackgroundHiveSplitLoader
                 switch (position) {
                     case 0:
                         return new HivePartitionMetadata(
-                                new HivePartition(new SchemaTableName("testSchema", "table_name")),
+                                table, new HivePartition(new SchemaTableName("testSchema", "table_name")),
                                 Optional.empty(),
-                                ImmutableMap.of());
+                                TableToPartitionMappings.createIdentityMapping(table));
                     case 1:
                         throw new RuntimeException("OFFLINE");
                     default:

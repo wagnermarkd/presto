@@ -22,7 +22,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -48,8 +47,8 @@ public class HiveSplit
     private final TupleDomain<HiveColumnHandle> effectivePredicate;
     private final OptionalInt bucketNumber;
     private final boolean forceLocalScheduling;
-    private final Map<Integer, HiveType> columnCoercions; // key: hiveColumnIndex
     private final Optional<BucketConversion> bucketConversion;
+    private final TableToPartitionMappings tableToPartitionMappings;
 
     @JsonCreator
     public HiveSplit(
@@ -66,8 +65,8 @@ public class HiveSplit
             @JsonProperty("bucketNumber") OptionalInt bucketNumber,
             @JsonProperty("forceLocalScheduling") boolean forceLocalScheduling,
             @JsonProperty("effectivePredicate") TupleDomain<HiveColumnHandle> effectivePredicate,
-            @JsonProperty("columnCoercions") Map<Integer, HiveType> columnCoercions,
-            @JsonProperty("bucketConversion") Optional<BucketConversion> bucketConversion)
+            @JsonProperty("bucketConversion") Optional<BucketConversion> bucketConversion,
+            @JsonProperty("tableToPartitionMappings") TableToPartitionMappings tableToPartitionMappings)
     {
         checkArgument(start >= 0, "start must be positive");
         checkArgument(length >= 0, "length must be positive");
@@ -81,8 +80,8 @@ public class HiveSplit
         requireNonNull(addresses, "addresses is null");
         requireNonNull(bucketNumber, "bucketNumber is null");
         requireNonNull(effectivePredicate, "tupleDomain is null");
-        requireNonNull(columnCoercions, "columnCoercions is null");
         requireNonNull(bucketConversion, "bucketConversion is null");
+        requireNonNull(tableToPartitionMappings, "tableToPartitionMappings is null");
 
         this.database = database;
         this.table = table;
@@ -97,8 +96,8 @@ public class HiveSplit
         this.bucketNumber = bucketNumber;
         this.forceLocalScheduling = forceLocalScheduling;
         this.effectivePredicate = effectivePredicate;
-        this.columnCoercions = columnCoercions;
         this.bucketConversion = bucketConversion;
+        this.tableToPartitionMappings = tableToPartitionMappings;
     }
 
     @JsonProperty
@@ -181,15 +180,15 @@ public class HiveSplit
     }
 
     @JsonProperty
-    public Map<Integer, HiveType> getColumnCoercions()
-    {
-        return columnCoercions;
-    }
-
-    @JsonProperty
     public Optional<BucketConversion> getBucketConversion()
     {
         return bucketConversion;
+    }
+
+    @JsonProperty
+    public TableToPartitionMappings getTableToPartitionMappings()
+    {
+        return tableToPartitionMappings;
     }
 
     @Override

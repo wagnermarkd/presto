@@ -528,6 +528,7 @@ public class HiveWriterFactory
         }
 
         // verify the file types match the input type
+        // TODO mwagner Maybe the below todo can be removed
         // todo adapt input types to the file types as Hive does
         for (int fileIndex = 0; fileIndex < fileColumnNames.size(); fileIndex++) {
             String columnName = fileColumnNames.get(fileIndex);

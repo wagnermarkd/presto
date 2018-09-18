@@ -241,6 +241,7 @@ public class OrcPageSourceFactory
         return format("Error opening Hive split %s (offset=%s, length=%s): %s", path, start, length, t.getMessage());
     }
 
+    // TODO: mwagner this should probably take in a columnmapping and compose it with the physical to ordinal. table -> partition -> ordinal
     private static List<HiveColumnHandle> getPhysicalHiveColumnHandles(List<HiveColumnHandle> columns, boolean useOrcColumnNames, OrcReader reader, Path path)
     {
         if (!useOrcColumnNames) {

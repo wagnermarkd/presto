@@ -57,11 +57,11 @@ public class TestHiveSplit
                 OptionalInt.empty(),
                 true,
                 TupleDomain.all(),
-                ImmutableMap.of(1, HIVE_STRING),
                 Optional.of(new HiveSplit.BucketConversion(
                         32,
                         16,
-                        ImmutableList.of(new HiveColumnHandle("col", HIVE_LONG, BIGINT.getTypeSignature(), 5, ColumnType.REGULAR, Optional.of("comment"))))));
+                        ImmutableList.of(new HiveColumnHandle("col", HIVE_LONG, BIGINT.getTypeSignature(), 5, ColumnType.REGULAR, Optional.of("comment"))))),
+                new TableToPartitionMappings(ImmutableMap.of(1, 1), ImmutableMap.of(1, HIVE_STRING)));
 
         String json = codec.toJson(expected);
         HiveSplit actual = codec.fromJson(json);
@@ -76,8 +76,8 @@ public class TestHiveSplit
         assertEquals(actual.getSchema(), expected.getSchema());
         assertEquals(actual.getPartitionKeys(), expected.getPartitionKeys());
         assertEquals(actual.getAddresses(), expected.getAddresses());
-        assertEquals(actual.getColumnCoercions(), expected.getColumnCoercions());
         assertEquals(actual.getBucketConversion(), expected.getBucketConversion());
         assertEquals(actual.isForceLocalScheduling(), expected.isForceLocalScheduling());
+        assertEquals(actual.getTableToPartitionMappings(), expected.getTableToPartitionMappings());
     }
 }

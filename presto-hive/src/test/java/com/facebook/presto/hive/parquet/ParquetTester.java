@@ -25,18 +25,7 @@ import com.facebook.presto.hive.parquet.write.SingleLevelArraySchemaConverter;
 import com.facebook.presto.hive.parquet.write.TestMapredParquetOutputFormat;
 import com.facebook.presto.spi.ConnectorPageSource;
 import com.facebook.presto.spi.Page;
-import com.facebook.presto.spi.RecordCursor;
-import com.facebook.presto.spi.RecordPageSource;
 import com.facebook.presto.spi.block.Block;
-import com.facebook.presto.spi.type.ArrayType;
-import com.facebook.presto.spi.type.DateType;
-import com.facebook.presto.spi.type.DecimalType;
-import com.facebook.presto.spi.type.MapType;
-import com.facebook.presto.spi.type.SqlDate;
-import com.facebook.presto.spi.type.SqlDecimal;
-import com.facebook.presto.spi.type.SqlTimestamp;
-import com.facebook.presto.spi.type.SqlVarbinary;
-import com.facebook.presto.spi.type.TimestampType;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.testing.TestingConnectorSession;
 import com.google.common.base.Function;
@@ -45,7 +34,6 @@ import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
-import io.airlift.slice.Slice;
 import io.airlift.units.DataSize;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator.RecordWriter;
@@ -68,7 +56,6 @@ import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -79,15 +66,7 @@ import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 
-import static com.facebook.presto.hive.AbstractTestHiveFileFormats.getFieldFromCursor;
 import static com.facebook.presto.hive.HiveTestUtils.createTestHdfsEnvironment;
-import static com.facebook.presto.hive.HiveUtil.isArrayType;
-import static com.facebook.presto.hive.HiveUtil.isMapType;
-import static com.facebook.presto.hive.HiveUtil.isRowType;
-import static com.facebook.presto.hive.HiveUtil.isStructuralType;
-import static com.facebook.presto.spi.type.TimeZoneKey.UTC_KEY;
-import static com.facebook.presto.spi.type.VarbinaryType.VARBINARY;
-import static com.facebook.presto.spi.type.Varchars.isVarcharType;
 import static com.google.common.base.Functions.constant;
 import static com.google.common.collect.Iterables.transform;
 import static io.airlift.units.DataSize.succinctBytes;
@@ -259,12 +238,7 @@ public class ParquetTester
                 dataFile,
                 columnNames,
                 columnTypes)) {
-            if (pageSource instanceof RecordPageSource) {
-                assertRecordCursor(columnTypes, expectedValues, ((RecordPageSource) pageSource).getCursor());
-            }
-            else {
-                assertPageSource(columnTypes, expectedValues, pageSource);
-            }
+            assertPageSource(columnTypes, expectedValues, pageSource);
             assertFalse(stream(expectedValues).allMatch(Iterator::hasNext));
         }
     }
@@ -283,57 +257,6 @@ public class ParquetTester
                 }
             }
         }
-    }
-
-    private static void assertRecordCursor(List<Type> types, Iterator<?>[] valuesByField, RecordCursor cursor)
-    {
-        while (cursor.advanceNextPosition()) {
-            for (int field = 0; field < types.size(); field++) {
-                assertTrue(valuesByField[field].hasNext());
-                Object expected = valuesByField[field].next();
-                Object actual = getActualCursorValue(cursor, types.get(field), field);
-                assertEquals(actual, expected);
-            }
-        }
-    }
-
-    private static Object getActualCursorValue(RecordCursor cursor, Type type, int field)
-    {
-        Object fieldFromCursor = getFieldFromCursor(cursor, type, field);
-        if (fieldFromCursor == null) {
-            return null;
-        }
-        if (isStructuralType(type)) {
-            Block block = (Block) fieldFromCursor;
-            if (isArrayType(type)) {
-                Type elementType = ((ArrayType) type).getElementType();
-                return toArrayValue(block, elementType);
-            }
-            else if (isMapType(type)) {
-                MapType mapType = (MapType) type;
-                return toMapValue(block, mapType.getKeyType(), mapType.getValueType());
-            }
-            else if (isRowType(type)) {
-                return toRowValue(block, type.getTypeParameters());
-            }
-        }
-        if (type instanceof DecimalType) {
-            DecimalType decimalType = (DecimalType) type;
-            return new SqlDecimal((BigInteger) fieldFromCursor, decimalType.getPrecision(), decimalType.getScale());
-        }
-        if (isVarcharType(type)) {
-            return new String(((Slice) fieldFromCursor).getBytes());
-        }
-        if (VARBINARY.equals(type)) {
-            return new SqlVarbinary(((Slice) fieldFromCursor).getBytes());
-        }
-        if (DateType.DATE.equals(type)) {
-            return new SqlDate(((Long) fieldFromCursor).intValue());
-        }
-        if (TimestampType.TIMESTAMP.equals(type)) {
-            return new SqlTimestamp((long) fieldFromCursor, UTC_KEY);
-        }
-        return fieldFromCursor;
     }
 
     private static Map toMapValue(Block mapBlock, Type keyType, Type valueType)

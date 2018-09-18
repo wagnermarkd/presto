@@ -14,7 +14,6 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.HiveBucketing.HiveBucketFilter;
-import com.facebook.presto.hive.metastore.Column;
 import com.facebook.presto.hive.metastore.Partition;
 import com.facebook.presto.hive.metastore.SemiTransactionalHiveMetastore;
 import com.facebook.presto.hive.metastore.Table;
@@ -257,7 +256,7 @@ public class HiveSplitManager
         if (hivePartitions.size() == 1) {
             HivePartition firstPartition = getOnlyElement(hivePartitions);
             if (firstPartition.getPartitionId().equals(UNPARTITIONED_ID)) {
-                return ImmutableList.of(new HivePartitionMetadata(firstPartition, Optional.empty(), ImmutableMap.of()));
+                return ImmutableList.of(new HivePartitionMetadata(table, firstPartition, Optional.empty(), TableToPartitionMappings.createIdentityMapping(table)));
             }
         }
 
@@ -296,20 +295,26 @@ public class HiveSplitManager
                     throw new HiveNotReadableException(tableName, Optional.of(partName), partitionNotReadable);
                 }
 
+                // TODO update the below comment
                 // Verify that the partition schema matches the table schema.
                 // Either adding or dropping columns from the end of the table
                 // without modifying existing partitions is allowed, but every
                 // column that exists in both the table and partition must have
                 // the same type.
-                List<Column> tableColumns = table.getDataColumns();
-                List<Column> partitionColumns = partition.getColumns();
+                List<HiveColumnHandle> tableColumns = HiveUtil.getRegularColumnHandles(table);
+                List<HiveColumnHandle> partitionColumns = HiveUtil.getRegularColumnHandles(table, partition);
                 if ((tableColumns == null) || (partitionColumns == null)) {
                     throw new PrestoException(HIVE_INVALID_METADATA, format("Table '%s' or partition '%s' has null columns", tableName, partName));
                 }
-                ImmutableMap.Builder<Integer, HiveTypeName> columnCoercions = ImmutableMap.builder();
-                for (int i = 0; i < min(partitionColumns.size(), tableColumns.size()); i++) {
-                    HiveType tableType = tableColumns.get(i).getType();
-                    HiveType partitionType = partitionColumns.get(i).getType();
+                ImmutableMap<Integer, Integer> tableToPartitionMapping = supportReorderMap(tableColumns, partitionColumns);
+                ImmutableMap.Builder<Integer, HiveType> columnCoercions = ImmutableMap.builder();
+                for (int i = 0; i < tableColumns.size(); i++) {
+                    HiveType tableType = tableColumns.get(i).getHiveType();
+                    if (!tableToPartitionMapping.containsKey(i)) {
+                        continue;
+                    }
+                    int partitionIndex = tableToPartitionMapping.get(i);
+                    HiveType partitionType = partitionColumns.get(partitionIndex).getHiveType();
                     if (!tableType.equals(partitionType)) {
                         if (!coercionPolicy.canCoerce(partitionType, tableType)) {
                             throw new PrestoException(HIVE_PARTITION_SCHEMA_MISMATCH, format("" +
@@ -321,10 +326,10 @@ public class HiveSplitManager
                                     tableName,
                                     tableType,
                                     partName,
-                                    partitionColumns.get(i).getName(),
+                                    partitionColumns.get(partitionIndex).getName(),
                                     partitionType));
                         }
-                        columnCoercions.put(i, partitionType.getHiveTypeName());
+                        columnCoercions.put(i, partitionType);
                     }
                 }
 
@@ -352,12 +357,43 @@ public class HiveSplitManager
                     }
                 }
 
-                results.add(new HivePartitionMetadata(hivePartition, Optional.of(partition), columnCoercions.build()));
+                ImmutableMap<Integer, HiveType> coercions = columnCoercions.build();
+                TableToPartitionMappings tableToPartitionMappings = new TableToPartitionMappings(tableToPartitionMapping, coercions);
+                results.add(new HivePartitionMetadata(table, hivePartition, Optional.of(partition), tableToPartitionMappings));
             }
 
             return results.build();
         });
         return concat(partitionBatches);
+    }
+
+    private ImmutableMap<Integer, Integer> supportRenameMap(List<HiveColumnHandle> tableColumns, List<HiveColumnHandle> partitionColumns)
+    {
+        ImmutableMap.Builder<Integer, Integer> tableToPartition = ImmutableMap.builder();
+        for (int i = 0; i < min(partitionColumns.size(), tableColumns.size()); i++) {
+            tableToPartition.put(i, i);
+        }
+        return tableToPartition.build();
+    }
+
+    private ImmutableMap<Integer, Integer> supportReorderMap(List<HiveColumnHandle> tableColumns, List<HiveColumnHandle> partitionColumns)
+    {
+        ImmutableMap.Builder<String, Integer> nameIndex = ImmutableMap.builder();
+        for (int i = 0; i < partitionColumns.size(); i++) {
+            nameIndex.put(partitionColumns.get(i).getName().toLowerCase(), i);
+        }
+        // TODO rename
+        ImmutableMap<String, Integer> integerImmutableMap = nameIndex.build();
+        ImmutableMap.Builder<Integer, Integer> tableToPartition = ImmutableMap.builder();
+        for (int i = 0; i < tableColumns.size(); i++) {
+            // The table may have columns that the partition doesn't
+            Integer value = integerImmutableMap.get(tableColumns.get(i).getName().toLowerCase());
+            if (value == null) {
+                continue;
+            }
+            tableToPartition.put(i, value);
+        }
+        return tableToPartition.build();
     }
 
     private static boolean isBucketCountCompatible(int tableBucketCount, int partitionBucketCount)

@@ -26,7 +26,9 @@ import com.facebook.presto.spi.connector.ConnectorTransactionHandle;
 import com.facebook.presto.spi.predicate.TupleDomain;
 import com.facebook.presto.spi.type.Type;
 import com.facebook.presto.spi.type.TypeManager;
+import com.facebook.presto.spi.type.TypeSignature;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
@@ -45,7 +47,7 @@ import java.util.Set;
 import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.PARTITION_KEY;
 import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.SYNTHESIZED;
-import static com.facebook.presto.hive.HivePageSourceProvider.ColumnMapping.toColumnHandles;
+import static com.facebook.presto.hive.HivePageSourceProvider.ColumnMapping.toPartitionColumnHandles;
 import static com.facebook.presto.hive.HiveUtil.getPrefilledColumnValue;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -106,8 +108,8 @@ public class HivePageSourceProvider
                 hiveSplit.getPartitionKeys(),
                 hiveStorageTimeZone,
                 typeManager,
-                hiveSplit.getColumnCoercions(),
-                hiveSplit.getBucketConversion());
+                hiveSplit.getBucketConversion(),
+                hiveSplit.getTableToPartitionMappings());
         if (pageSource.isPresent()) {
             return pageSource.get();
         }
@@ -130,29 +132,33 @@ public class HivePageSourceProvider
             List<HivePartitionKey> partitionKeys,
             DateTimeZone hiveStorageTimeZone,
             TypeManager typeManager,
-            Map<Integer, HiveType> columnCoercions,
-            Optional<BucketConversion> bucketConversion)
+            Optional<BucketConversion> bucketConversion,
+            TableToPartitionMappings tableToPartitionMappings)
     {
         List<ColumnMapping> columnMappings = ColumnMapping.buildColumnMappings(
                 partitionKeys,
                 hiveColumns,
                 bucketConversion.map(BucketConversion::getBucketColumnHandles).orElse(ImmutableList.of()),
-                columnCoercions,
-                path,
-                bucketNumber);
+                tableToPartitionMappings,
+                bucketNumber, path);
         List<ColumnMapping> regularAndInterimColumnMappings = ColumnMapping.extractRegularAndInterimColumnMappings(columnMappings);
+        // Calculate the mapping from projected Table columns to projected columns
+        // TODO: move this into the instantiation of the adapter
+        ImmutableMap<Integer, Integer> materializedTableToPartitionMap = buildTableToPartitionMap(columnMappings, regularAndInterimColumnMappings);
 
         Optional<BucketAdaptation> bucketAdaptation = bucketConversion.map(conversion -> {
-            Map<Integer, ColumnMapping> hiveIndexToBlockIndex = uniqueIndex(regularAndInterimColumnMappings, columnMapping -> columnMapping.getHiveColumnHandle().getHiveColumnIndex());
+            // Table index
+            Map<Integer, ColumnMapping> hiveIndexToPartitionIndex = uniqueIndex(regularAndInterimColumnMappings, columnMapping -> columnMapping.getHiveColumnHandle().getHiveColumnIndex());
             int[] bucketColumnIndices = conversion.getBucketColumnHandles().stream()
-                    .mapToInt(columnHandle -> hiveIndexToBlockIndex.get(columnHandle.getHiveColumnIndex()).getIndex())
+                    .mapToInt(columnHandle -> hiveIndexToPartitionIndex.get(columnHandle.getHiveColumnIndex()).getSourceIndex())
                     .toArray();
             List<HiveType> bucketColumnHiveTypes = conversion.getBucketColumnHandles().stream()
-                    .map(columnHandle -> hiveIndexToBlockIndex.get(columnHandle.getHiveColumnIndex()).getHiveColumnHandle().getHiveType())
+                    .map(columnHandle -> hiveIndexToPartitionIndex.get(columnHandle.getHiveColumnIndex()).getHiveColumnHandle().getHiveType())
                     .collect(toImmutableList());
             return new BucketAdaptation(bucketColumnIndices, bucketColumnHiveTypes, conversion.getTableBucketCount(), conversion.getPartitionBucketCount(), bucketNumber.getAsInt());
         });
 
+        Optional<? extends ConnectorPageSource> delegate = Optional.empty();
         for (HivePageSourceFactory pageSourceFactory : pageSourceFactories) {
             Optional<? extends ConnectorPageSource> pageSource = pageSourceFactory.createPageSource(
                     configuration,
@@ -162,70 +168,73 @@ public class HivePageSourceProvider
                     length,
                     fileSize,
                     schema,
-                    toColumnHandles(regularAndInterimColumnMappings, true),
+                    toPartitionColumnHandles(regularAndInterimColumnMappings, tableToPartitionMappings, true),
                     effectivePredicate,
                     hiveStorageTimeZone);
             if (pageSource.isPresent()) {
-                return Optional.of(
-                        new HivePageSource(
-                                columnMappings,
-                                bucketAdaptation,
-                                hiveStorageTimeZone,
-                                typeManager,
-                                pageSource.get()));
+                delegate = pageSource;
+                break;
             }
         }
 
-        for (HiveRecordCursorProvider provider : cursorProviders) {
-            // GenericHiveRecordCursor will automatically do the coercion without HiveCoercionRecordCursor
-            boolean doCoercion = !(provider instanceof GenericHiveRecordCursorProvider);
+        if (!delegate.isPresent()) {
+            for (HiveRecordCursorProvider provider : cursorProviders) {
+                // GenericHiveRecordCursor will automatically do the coercion without the adaptor
+                // TODO Pipe this into the adaptor? Is it necessary? Is it more performant
+//                boolean doCoercion = !(provider instanceof GenericHiveRecordCursorProvider);
+                boolean doCoercion = true;
 
-            Optional<RecordCursor> cursor = provider.createRecordCursor(
-                    configuration,
-                    session,
-                    path,
-                    start,
-                    length,
-                    fileSize,
-                    schema,
-                    toColumnHandles(regularAndInterimColumnMappings, doCoercion),
-                    effectivePredicate,
-                    hiveStorageTimeZone,
-                    typeManager);
-
-            if (cursor.isPresent()) {
-                RecordCursor delegate = cursor.get();
-
-                if (bucketAdaptation.isPresent()) {
-                    delegate = new HiveBucketAdapterRecordCursor(
-                            bucketAdaptation.get().getBucketColumnIndices(),
-                            bucketAdaptation.get().getBucketColumnHiveTypes(),
-                            bucketAdaptation.get().getTableBucketCount(),
-                            bucketAdaptation.get().getPartitionBucketCount(),
-                            bucketAdaptation.get().getBucketToKeep(),
-                            typeManager,
-                            delegate);
-                }
-
-                // Need to wrap RcText and RcBinary into a wrapper, which will do the coercion for mismatch columns
-                if (doCoercion) {
-                    delegate = new HiveCoercionRecordCursor(regularAndInterimColumnMappings, typeManager, delegate);
-                }
-
-                HiveRecordCursor hiveRecordCursor = new HiveRecordCursor(
-                        columnMappings,
+                List<HiveColumnHandle> partitionColumns = toPartitionColumnHandles(regularAndInterimColumnMappings, tableToPartitionMappings, doCoercion);
+                Optional<RecordCursor> cursor = provider.createRecordCursor(
+                        configuration,
+                        session,
+                        path,
+                        start,
+                        length,
+                        fileSize,
+                        schema,
+                        partitionColumns,
+                        effectivePredicate,
                         hiveStorageTimeZone,
-                        typeManager,
-                        delegate);
-                List<Type> columnTypes = hiveColumns.stream()
-                        .map(input -> typeManager.getType(input.getTypeSignature()))
-                        .collect(toList());
+                        typeManager);
 
-                return Optional.of(new RecordPageSource(columnTypes, hiveRecordCursor));
+                if (cursor.isPresent()) {
+                    RecordCursor delegateCursor = cursor.get();
+
+                    List<Type> columnTypes = partitionColumns.stream()
+                            .map(input -> typeManager.getType(input.getTypeSignature()))
+                            .collect(toList());
+
+                    delegate = Optional.of(new RecordPageSource(columnTypes, delegateCursor));
+                    break;
+                }
             }
+        }
+        if (delegate.isPresent()) {
+            return Optional.of(
+                    new HivePartitionAdapatingPageSource(
+                            columnMappings,
+                            materializedTableToPartitionMap,
+                            bucketAdaptation,
+                            hiveStorageTimeZone,
+                            typeManager,
+                            delegate.get()));
         }
 
         return Optional.empty();
+    }
+
+    private static ImmutableMap<Integer, Integer> buildTableToPartitionMap(List<ColumnMapping> columnMappings, List<ColumnMapping> regularAndInterimColumnMappings)
+    {
+        ImmutableMap.Builder<Integer, Integer> materializedTableToPartition = ImmutableMap.builder();
+        int partitionIdx = 0;
+        for (int tableIdx = 0; tableIdx < columnMappings.size() && partitionIdx < regularAndInterimColumnMappings.size(); tableIdx++) {
+            if (regularAndInterimColumnMappings.get(partitionIdx).equals(columnMappings.get(tableIdx))) {
+                materializedTableToPartition.put(tableIdx, partitionIdx);
+                partitionIdx++;
+            }
+        }
+        return materializedTableToPartition.build();
     }
 
     public static class ColumnMapping
@@ -257,6 +266,13 @@ public class HivePageSourceProvider
             return new ColumnMapping(ColumnMappingKind.INTERIM, hiveColumnHandle, Optional.empty(), OptionalInt.of(index), Optional.empty());
         }
 
+        public static ColumnMapping nullMapping(HiveColumnHandle hiveColumnHandle, int index)
+        {
+            checkArgument(hiveColumnHandle.getColumnType() == REGULAR);
+            // "\N" is Hive's magical byte sequence that represents nulls
+            return new ColumnMapping(ColumnMappingKind.NULL, hiveColumnHandle, Optional.of("\\N"), OptionalInt.of(index), Optional.empty());
+        }
+
         private ColumnMapping(ColumnMappingKind kind, HiveColumnHandle hiveColumnHandle, Optional<String> prefilledValue, OptionalInt index, Optional<HiveType> coerceFrom)
         {
             this.kind = requireNonNull(kind, "kind is null");
@@ -282,7 +298,7 @@ public class HivePageSourceProvider
             return hiveColumnHandle;
         }
 
-        public int getIndex()
+        public int getSourceIndex()
         {
             checkState(kind == ColumnMappingKind.REGULAR || kind == ColumnMappingKind.INTERIM);
             return index.getAsInt();
@@ -296,32 +312,40 @@ public class HivePageSourceProvider
         /**
          * @param columns columns that need to be returned to engine
          * @param requiredInterimColumns columns that are needed for processing, but shouldn't be returned to engine (may overlaps with columns)
-         * @param columnCoercions map from hive column index to hive type
+         * @param tableToPartitionMappings mapping class from the table's schema to the partition's
          * @param bucketNumber empty if table is not bucketed, a number within [0, # bucket in table) otherwise
          */
         public static List<ColumnMapping> buildColumnMappings(
                 List<HivePartitionKey> partitionKeys,
                 List<HiveColumnHandle> columns,
                 List<HiveColumnHandle> requiredInterimColumns,
-                Map<Integer, HiveType> columnCoercions,
-                Path path,
-                OptionalInt bucketNumber)
+                TableToPartitionMappings tableToPartitionMappings,
+                OptionalInt bucketNumber,
+                Path path)
         {
             Map<String, HivePartitionKey> partitionKeysByName = uniqueIndex(partitionKeys, HivePartitionKey::getName);
             int regularIndex = 0;
             Set<Integer> regularColumnIndices = new HashSet<>();
             ImmutableList.Builder<ColumnMapping> columnMappings = ImmutableList.builder();
-            for (HiveColumnHandle column : columns) {
-                Optional<HiveType> coercionFrom = Optional.ofNullable(columnCoercions.get(column.getHiveColumnIndex()));
-                if (column.getColumnType() == REGULAR) {
-                    checkArgument(regularColumnIndices.add(column.getHiveColumnIndex()), "duplicate hiveColumnIndex in columns list");
-                    columnMappings.add(regular(column, regularIndex, coercionFrom));
+            for (HiveColumnHandle tableColumn : columns) {
+                TableToPartitionMappings.TableToPartitionMap partitionMap = tableToPartitionMappings.getMapping(tableColumn.getHiveColumnIndex());
+                Optional<HiveType> coercionFrom = Optional.ofNullable(partitionMap.getPartitionType());
+                if (tableColumn.getColumnType() == REGULAR) {
+                    checkArgument(regularColumnIndices.add(tableColumn.getHiveColumnIndex()), "duplicate hiveColumnIndex in columns list");
+                    // If the column's in this partition, add it. Otherwise add null.
+                    // TODO: Maybe move elsewhere?
+                    if (partitionMap.isPresent()) {
+                        columnMappings.add(regular(tableColumn, regularIndex, coercionFrom));
+                    }
+                    else {
+                        columnMappings.add(nullMapping(tableColumn, regularIndex));
+                    }
                     regularIndex++;
                 }
                 else {
                     columnMappings.add(prefilled(
-                            column,
-                            getPrefilledColumnValue(column, partitionKeysByName.get(column.getName()), path, bucketNumber),
+                            tableColumn,
+                            getPrefilledColumnValue(tableColumn, partitionKeysByName.get(tableColumn.getName()), path, bucketNumber),
                             coercionFrom));
                 }
             }
@@ -346,19 +370,29 @@ public class HivePageSourceProvider
                     .collect(toImmutableList());
         }
 
-        public static List<HiveColumnHandle> toColumnHandles(List<ColumnMapping> regularColumnMappings, boolean doCoercion)
+        public static List<HiveColumnHandle> toPartitionColumnHandles(List<ColumnMapping> regularColumnMappings, TableToPartitionMappings tableToPartitionMappings, boolean doCoercion)
         {
             return regularColumnMappings.stream()
                     .map(columnMapping -> {
                         HiveColumnHandle columnHandle = columnMapping.getHiveColumnHandle();
+                        HiveType columnType;
+                        TypeSignature columnTypeSignature;
+
+                        // TODO simplify
                         if (!doCoercion || !columnMapping.getCoercionFrom().isPresent()) {
-                            return columnHandle;
+                            columnType = columnHandle.getHiveType();
+                            columnTypeSignature = columnHandle.getTypeSignature();
                         }
+                        else {
+                            columnType = columnMapping.getCoercionFrom().get();
+                            columnTypeSignature = columnMapping.getCoercionFrom().get().getTypeSignature();
+                        }
+
                         return new HiveColumnHandle(
                                 columnHandle.getName(),
-                                columnMapping.getCoercionFrom().get(),
-                                columnMapping.getCoercionFrom().get().getTypeSignature(),
-                                columnHandle.getHiveColumnIndex(),
+                                columnType,
+                                columnTypeSignature,
+                                tableToPartitionMappings.getMapping(columnHandle.getHiveColumnIndex()).getPartitionIndex(),
                                 columnHandle.getColumnType(),
                                 Optional.empty());
                     })
@@ -371,6 +405,7 @@ public class HivePageSourceProvider
         REGULAR,
         PREFILLED,
         INTERIM,
+        NULL
     }
 
     public static class BucketAdaptation

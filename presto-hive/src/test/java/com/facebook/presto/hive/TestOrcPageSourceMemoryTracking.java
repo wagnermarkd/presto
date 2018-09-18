@@ -81,6 +81,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Properties;
@@ -469,9 +470,19 @@ public class TestOrcPageSourceMemoryTracking
                     partitionKeys,
                     DateTimeZone.UTC,
                     TYPE_MANAGER,
-                    ImmutableMap.of(),
-                    Optional.empty())
+                    Optional.empty(),
+                    new TableToPartitionMappings(identityMap(columns), ImmutableMap.of()))
                     .get();
+        }
+
+        // TODO: mwagner duplicates code in TestHiveFileFormats
+        private Map<Integer, Integer> identityMap(List<HiveColumnHandle> testColumns)
+        {
+            ImmutableMap.Builder<Integer, Integer> identity = ImmutableMap.builder();
+            for (int i = 0; i < testColumns.size(); i++) {
+                identity.put(i, i);
+            }
+            return identity.build();
         }
 
         public SourceOperator newTableScanOperator(DriverContext driverContext)

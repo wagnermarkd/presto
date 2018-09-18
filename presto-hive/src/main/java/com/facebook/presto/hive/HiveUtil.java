@@ -14,6 +14,7 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.metastore.Column;
+import com.facebook.presto.hive.metastore.Partition;
 import com.facebook.presto.hive.metastore.Table;
 import com.facebook.presto.spi.ConnectorTableHandle;
 import com.facebook.presto.spi.ErrorCodeSupplier;
@@ -305,12 +306,12 @@ public final class HiveUtil
         }
     }
 
-    public static StructObjectInspector getTableObjectInspector(Properties schema)
+    public static StructObjectInspector getObjectInspector(Properties schema)
     {
-        return getTableObjectInspector(getDeserializer(schema));
+        return getObjectInspector(getDeserializer(schema));
     }
 
-    public static StructObjectInspector getTableObjectInspector(@SuppressWarnings("deprecation") Deserializer deserializer)
+    public static StructObjectInspector getObjectInspector(@SuppressWarnings("deprecation") Deserializer deserializer)
     {
         try {
             ObjectInspector inspector = deserializer.getObjectInspector();
@@ -324,7 +325,7 @@ public final class HiveUtil
 
     public static List<? extends StructField> getTableStructFields(Table table)
     {
-        return getTableObjectInspector(getHiveSchema(table)).getAllStructFieldRefs();
+        return getObjectInspector(getHiveSchema(table)).getAllStructFieldRefs();
     }
 
     public static boolean isDeserializerClass(Properties schema, Class<?> deserializerClass)
@@ -748,10 +749,27 @@ public final class HiveUtil
 
     public static List<HiveColumnHandle> getRegularColumnHandles(Table table)
     {
+        return getRegularColumnHandles(table, Optional.empty());
+    }
+
+    public static List<HiveColumnHandle> getRegularColumnHandles(Table table, Partition partition)
+    {
+        return getRegularColumnHandles(table, Optional.of(partition));
+    }
+
+    private static List<HiveColumnHandle> getRegularColumnHandles(Table table, Optional<Partition> partition)
+    {
         ImmutableList.Builder<HiveColumnHandle> columns = ImmutableList.builder();
 
         int hiveColumnIndex = 0;
-        for (Column field : table.getDataColumns()) {
+        List<Column> hiveColumns;
+        if (partition.isPresent()) {
+            hiveColumns = partition.get().getColumns();
+        }
+        else {
+            hiveColumns = table.getDataColumns();
+        }
+        for (Column field : hiveColumns) {
             // ignore unsupported types rather than failing
             HiveType hiveType = field.getType();
             if (hiveType.isSupportedType()) {

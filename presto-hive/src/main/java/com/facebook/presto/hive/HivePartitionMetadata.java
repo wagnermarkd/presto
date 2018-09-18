@@ -14,23 +14,25 @@
 package com.facebook.presto.hive;
 
 import com.facebook.presto.hive.metastore.Partition;
+import com.facebook.presto.hive.metastore.Table;
 
-import java.util.Map;
 import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
 
 public class HivePartitionMetadata
 {
+    private final Table table;
     private final Optional<Partition> partition;
     private final HivePartition hivePartition;
-    private final Map<Integer, HiveTypeName> columnCoercions;
+    private final TableToPartitionMappings tableToPartitionMappings;
 
-    HivePartitionMetadata(HivePartition hivePartition, Optional<Partition> partition, Map<Integer, HiveTypeName> columnCoercions)
+    HivePartitionMetadata(Table table, HivePartition hivePartition, Optional<Partition> partition, TableToPartitionMappings tableToPartitionMappings)
     {
+        this.table = requireNonNull(table, "table is null");
         this.partition = requireNonNull(partition, "partition is null");
         this.hivePartition = requireNonNull(hivePartition, "hivePartition is null");
-        this.columnCoercions = requireNonNull(columnCoercions, "columnCoercions is null");
+        this.tableToPartitionMappings = requireNonNull(tableToPartitionMappings, "tableToPartitionMappings is null");
     }
 
     public HivePartition getHivePartition()
@@ -46,8 +48,13 @@ public class HivePartitionMetadata
         return partition;
     }
 
-    public Map<Integer, HiveTypeName> getColumnCoercions()
+    public Table getTable()
     {
-        return columnCoercions;
+        return table;
+    }
+
+    public TableToPartitionMappings getTableToPartitionMappings()
+    {
+        return tableToPartitionMappings;
     }
 }

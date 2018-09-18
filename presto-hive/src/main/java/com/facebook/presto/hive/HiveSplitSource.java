@@ -57,7 +57,6 @@ import static com.facebook.presto.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static com.facebook.presto.spi.connector.NotPartitionedPartitionHandle.NOT_PARTITIONED;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.collect.Maps.transformValues;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static io.airlift.concurrent.MoreFutures.failedFuture;
 import static io.airlift.concurrent.MoreFutures.toCompletableFuture;
@@ -374,8 +373,8 @@ class HiveSplitSource
                         internalSplit.getBucketNumber(),
                         internalSplit.isForceLocalScheduling(),
                         (TupleDomain<HiveColumnHandle>) compactEffectivePredicate,
-                        transformValues(internalSplit.getColumnCoercions(), HiveTypeName::toHiveType),
-                        internalSplit.getBucketConversion()));
+                        internalSplit.getBucketConversion(),
+                        internalSplit.getTableToPartitionMappings()));
                 internalSplit.increaseStart(splitBytes);
 
                 if (internalSplit.isDone()) {

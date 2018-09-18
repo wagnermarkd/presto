@@ -52,7 +52,7 @@ import static com.facebook.presto.hive.HiveColumnHandle.ColumnType.REGULAR;
 import static com.facebook.presto.hive.HiveErrorCode.HIVE_CURSOR_ERROR;
 import static com.facebook.presto.hive.HiveUtil.closeWithSuppression;
 import static com.facebook.presto.hive.HiveUtil.getDeserializer;
-import static com.facebook.presto.hive.HiveUtil.getTableObjectInspector;
+import static com.facebook.presto.hive.HiveUtil.getObjectInspector;
 import static com.facebook.presto.hive.HiveUtil.isStructuralType;
 import static com.facebook.presto.hive.util.SerDeUtils.getBlockObject;
 import static com.facebook.presto.spi.type.BigintType.BIGINT;
@@ -130,7 +130,7 @@ class GenericHiveRecordCursor<K, V extends Writable>
         this.hiveStorageTimeZone = hiveStorageTimeZone;
 
         this.deserializer = getDeserializer(splitSchema);
-        this.rowInspector = getTableObjectInspector(deserializer);
+        this.rowInspector = getObjectInspector(deserializer);
 
         int size = columns.size();
 

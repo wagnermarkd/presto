@@ -151,6 +151,8 @@ public class OrcRecordReader
         ImmutableSet.Builder<Integer> presentColumns = ImmutableSet.builder();
         ImmutableMap.Builder<Integer, Type> presentColumnsAndTypes = ImmutableMap.builder();
         OrcType root = types.get(0);
+        // TODO: mwagner this isn't right
+        // Yeah, it's definitely wrong if you add a file to an unpartitioned table then remove a column in the middle
         for (Map.Entry<Integer, Type> entry : includedColumns.entrySet()) {
             // an old file can have less columns since columns can be added
             // after the file was written

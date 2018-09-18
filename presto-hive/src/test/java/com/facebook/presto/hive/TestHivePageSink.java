@@ -48,6 +48,7 @@ import org.testng.annotations.Test;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Properties;
@@ -227,10 +228,20 @@ public class TestHivePageSink
                 OptionalInt.empty(),
                 false,
                 TupleDomain.all(),
-                ImmutableMap.of(),
-                Optional.empty());
+                Optional.empty(),
+                new TableToPartitionMappings(identityMap(getTestColumns()), ImmutableMap.of()));
         HivePageSourceProvider provider = new HivePageSourceProvider(config, createTestHdfsEnvironment(config), getDefaultHiveRecordCursorProvider(config), getDefaultHiveDataStreamFactories(config), TYPE_MANAGER);
         return provider.createPageSource(transaction, getSession(config), split, ImmutableList.copyOf(getColumnHandles()));
+    }
+
+    // TODO: Duplicates code in TestHiveFileFormats
+    private static Map<Integer, Integer> identityMap(List<LineItemColumn> testColumns)
+    {
+        ImmutableMap.Builder<Integer, Integer> identity = ImmutableMap.builder();
+        for (int i = 0; i < testColumns.size(); i++) {
+            identity.put(i, i);
+        }
+        return identity.build();
     }
 
     private static ConnectorPageSink createPageSink(HiveTransactionHandle transaction, HiveClientConfig config, ExtendedHiveMetastore metastore, Path outputPath, HiveWriterStats stats)
