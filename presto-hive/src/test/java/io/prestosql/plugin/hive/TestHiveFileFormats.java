@@ -15,7 +15,6 @@ package io.prestosql.plugin.hive;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import io.airlift.compress.lzo.LzoCodec;
@@ -28,8 +27,6 @@ import io.prestosql.plugin.hive.rcfile.RcFilePageSourceFactory;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.connector.RecordCursor;
-import io.prestosql.spi.connector.RecordPageSource;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.testing.TestingConnectorSession;
 import org.apache.hadoop.conf.Configuration;
@@ -56,6 +53,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Properties;
+import java.util.Set;
 import java.util.TimeZone;
 
 import static com.google.common.base.Predicates.not;
@@ -522,13 +520,33 @@ public class TestHiveFileFormats
                 .isFailingForRecordCursor(new GenericHiveRecordCursorProvider(HDFS_ENVIRONMENT), expectedErrorCode, expectedMessage);
     }
 
-    private void testCursorProvider(HiveRecordCursorProvider cursorProvider,
+    private void testRead(Optional<HiveRecordCursorProvider> cursorProvider,
+            Optional<HivePageSourceFactory> pageSourceFactory,
             FileSplit split,
             HiveStorageFormat storageFormat,
             List<TestColumn> testColumns,
             ConnectorSession session,
             int rowCount)
+            throws IOException
     {
+        // We're only meant to test one read path at a time
+        assertTrue(cursorProvider.isPresent() ^ pageSourceFactory.isPresent());
+        Set<HiveRecordCursorProvider> cursorProviderArg;
+        if (cursorProvider.isPresent()) {
+            cursorProviderArg = ImmutableSet.of(cursorProvider.get());
+        }
+        else {
+            cursorProviderArg = ImmutableSet.of();
+        }
+
+        Set<HivePageSourceFactory> pageSourceArg;
+        if (pageSourceFactory.isPresent()) {
+            pageSourceArg = ImmutableSet.of(pageSourceFactory.get());
+        }
+        else {
+            pageSourceArg = ImmutableSet.of();
+        }
+
         Properties splitProperties = new Properties();
         splitProperties.setProperty(FILE_INPUT_FORMAT, storageFormat.getInputFormat());
         splitProperties.setProperty(SERIALIZATION_LIB, storageFormat.getSerDe());
@@ -542,57 +560,11 @@ public class TestHiveFileFormats
 
         Configuration configuration = new Configuration();
         configuration.set("io.compression.codecs", LzoCodec.class.getName() + "," + LzopCodec.class.getName());
-        Optional<ConnectorPageSource> pageSource = HivePageSourceProvider.createHivePageSource(
-                ImmutableSet.of(cursorProvider),
-                ImmutableSet.of(),
-                configuration,
-                session,
-                split.getPath(),
-                OptionalInt.empty(),
-                split.getStart(),
-                split.getLength(),
-                split.getLength(),
-                Instant.now().toEpochMilli(),
-                splitProperties,
-                TupleDomain.all(),
-                getColumnHandles(testColumns),
-                partitionKeys,
-                DateTimeZone.getDefault(),
-                TYPE_MANAGER,
-                ImmutableMap.of(),
-                Optional.empty(),
-                false);
-
-        RecordCursor cursor = ((RecordPageSource) pageSource.get()).getCursor();
-
-        checkCursor(cursor, testColumns, rowCount);
-    }
-
-    private void testPageSourceFactory(HivePageSourceFactory sourceFactory,
-            FileSplit split,
-            HiveStorageFormat storageFormat,
-            List<TestColumn> testColumns,
-            ConnectorSession session,
-            int rowCount)
-            throws IOException
-    {
-        Properties splitProperties = new Properties();
-        splitProperties.setProperty(FILE_INPUT_FORMAT, storageFormat.getInputFormat());
-        splitProperties.setProperty(SERIALIZATION_LIB, storageFormat.getSerDe());
-        splitProperties.setProperty("columns", Joiner.on(',').join(transform(filter(testColumns, not(TestColumn::isPartitionKey)), TestColumn::getName)));
-        splitProperties.setProperty("columns.types", Joiner.on(',').join(transform(filter(testColumns, not(TestColumn::isPartitionKey)), TestColumn::getType)));
-
-        List<HivePartitionKey> partitionKeys = testColumns.stream()
-                .filter(TestColumn::isPartitionKey)
-                .map(input -> new HivePartitionKey(input.getName(), (String) input.getWriteValue()))
-                .collect(toList());
-
         List<HiveColumnHandle> columnHandles = getColumnHandles(testColumns);
-
         Optional<ConnectorPageSource> pageSource = HivePageSourceProvider.createHivePageSource(
-                ImmutableSet.of(),
-                ImmutableSet.of(sourceFactory),
-                new Configuration(),
+                cursorProviderArg,
+                pageSourceArg,
+                configuration,
                 session,
                 split.getPath(),
                 OptionalInt.empty(),
@@ -606,8 +578,9 @@ public class TestHiveFileFormats
                 partitionKeys,
                 DateTimeZone.getDefault(),
                 TYPE_MANAGER,
-                ImmutableMap.of(),
                 Optional.empty(),
+                false,
+                TableToPartitionMappings.createIdentityMapping(columnHandles),
                 false);
 
         assertTrue(pageSource.isPresent());
@@ -790,12 +763,7 @@ public class TestHiveFileFormats
                 else {
                     split = createTestFile(file.getAbsolutePath(), storageFormat, compressionCodec, writeColumns, rowsCount);
                 }
-                if (pageSourceFactory.isPresent()) {
-                    testPageSourceFactory(pageSourceFactory.get(), split, storageFormat, readColumns, session, rowsCount);
-                }
-                if (cursorProvider.isPresent()) {
-                    testCursorProvider(cursorProvider.get(), split, storageFormat, readColumns, session, rowsCount);
-                }
+                testRead(cursorProvider, pageSourceFactory, split, storageFormat, readColumns, session, rowsCount);
             }
             finally {
                 //noinspection ResultOfMethodCallIgnored

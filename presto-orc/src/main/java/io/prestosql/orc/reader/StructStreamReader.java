@@ -80,6 +80,7 @@ public class StructStreamReader
 
         this.streamDescriptor = requireNonNull(streamDescriptor, "stream is null");
 
+        // TODO: mwagner is it worth offering the option of order based resolution here?
         Map<String, StreamDescriptor> nestedStreams = streamDescriptor.getNestedStreams().stream()
                 .collect(toImmutableMap(stream -> stream.getFieldName().toLowerCase(Locale.ENGLISH), stream -> stream));
 

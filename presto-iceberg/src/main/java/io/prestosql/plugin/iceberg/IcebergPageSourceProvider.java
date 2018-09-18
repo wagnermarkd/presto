@@ -27,9 +27,11 @@ import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HdfsEnvironment.HdfsContext;
 import io.prestosql.plugin.hive.HiveColumnHandle;
-import io.prestosql.plugin.hive.HivePageSource;
 import io.prestosql.plugin.hive.HivePageSourceProvider.ColumnMapping;
+import io.prestosql.plugin.hive.HivePartitionAdapatingPageSource;
 import io.prestosql.plugin.hive.HivePartitionKey;
+import io.prestosql.plugin.hive.HiveType;
+import io.prestosql.plugin.hive.TableToPartitionMappings;
 import io.prestosql.plugin.hive.parquet.ParquetPageSource;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ColumnHandle;
@@ -86,6 +88,7 @@ import static io.prestosql.plugin.iceberg.IcebergSessionProperties.isFailOnCorru
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
+import static java.util.stream.Collectors.toMap;
 
 public class IcebergPageSourceProvider
         implements ConnectorPageSourceProvider
@@ -202,15 +205,18 @@ public class IcebergPageSourceProvider
                     systemMemoryContext,
                     maxReadBlockSize);
 
+            ImmutableList<HiveColumnHandle> visibleColumns = columns.stream()
+                    .filter(column -> !column.isHidden())
+                    .collect(toImmutableList());
+
+            TableToPartitionMappings mapping = createIdentityMapping(visibleColumns);
             List<ColumnMapping> columnMappings = buildColumnMappings(
                     partitionKeys,
-                    columns.stream()
-                            .filter(column -> !column.isHidden())
-                            .collect(toImmutableList()),
+                    visibleColumns,
                     ImmutableList.of(),
-                    ImmutableMap.of(),
-                    path,
+                    mapping,
                     OptionalInt.empty(),
+                    path,
                     fileSize,
                     fileStatus.getModificationTime());
 
@@ -232,12 +238,16 @@ public class IcebergPageSourceProvider
                     columnNameReplaced,
                     useParquetColumnNames);
 
-            return new HivePageSource(
+            return new HivePartitionAdapatingPageSource(
                     columnMappings,
+                    ColumnMapping.getInterimFromInputPermutation(columnMappings),
+                    columnMappings.size(),
+                    ColumnMapping.getOutputFromInterimPermutation(columnMappings),
                     Optional.empty(),
                     DateTimeZone.UTC,
                     typeManager,
-                    parquetPageSource);
+                    parquetPageSource,
+                    false);
         }
         catch (IOException | RuntimeException e) {
             try {
@@ -261,6 +271,19 @@ public class IcebergPageSourceProvider
             }
             throw new PrestoException(HIVE_CANNOT_OPEN_SPLIT, message, e);
         }
+    }
+
+    private static TableToPartitionMappings createIdentityMapping(ImmutableList<HiveColumnHandle> visibleColumns)
+    {
+        // In Hive, we would use TableToPartitionMappings#createIdentityMapping. However, that method expects to be given all columns of a table. In Iceberg, we only have the
+        // projected columns. Thus, we compute our own mapping.
+        Map<Integer, Integer> permutation = visibleColumns.stream().collect(toMap(
+                x -> x.getHiveColumnIndex(),
+                x -> x.getHiveColumnIndex()));
+        Map<Integer, HiveType> coercions = visibleColumns.stream().collect(toMap(
+                x -> x.getHiveColumnIndex(),
+                x -> x.getHiveType()));
+        return new TableToPartitionMappings(permutation, coercions);
     }
 
     /**

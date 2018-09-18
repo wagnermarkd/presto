@@ -21,11 +21,11 @@ import com.google.common.collect.Ordering;
 import io.airlift.concurrent.BoundedExecutor;
 import io.airlift.stats.CounterStat;
 import io.airlift.units.DataSize;
-import io.prestosql.plugin.hive.metastore.Column;
 import io.prestosql.plugin.hive.metastore.Partition;
 import io.prestosql.plugin.hive.metastore.SemiTransactionalHiveMetastore;
 import io.prestosql.plugin.hive.metastore.Table;
 import io.prestosql.plugin.hive.util.HiveBucketing.HiveBucketFilter;
+import io.prestosql.plugin.hive.util.HiveUtil;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.VersionEmbedder;
 import io.prestosql.spi.connector.ConnectorSession;
@@ -44,6 +44,7 @@ import javax.inject.Inject;
 
 import java.util.Iterator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executor;
@@ -94,6 +95,7 @@ public class HiveSplitManager
     private final int maxSplitsPerSecond;
     private final boolean recursiveDfsWalkerEnabled;
     private final CounterStat highMemorySplitSourceCounter;
+    private final boolean evolveUsingName;
 
     @Inject
     public HiveSplitManager(
@@ -123,7 +125,8 @@ public class HiveSplitManager
                 hiveConfig.getMaxInitialSplits(),
                 hiveConfig.getSplitLoaderConcurrency(),
                 hiveConfig.getMaxSplitsPerSecond(),
-                hiveConfig.getRecursiveDirWalkerEnabled());
+                hiveConfig.getRecursiveDirWalkerEnabled(),
+                hiveConfig.isEvolveByName());
     }
 
     public HiveSplitManager(
@@ -142,7 +145,8 @@ public class HiveSplitManager
             int maxInitialSplits,
             int splitLoaderConcurrency,
             @Nullable Integer maxSplitsPerSecond,
-            boolean recursiveDfsWalkerEnabled)
+            boolean recursiveDfsWalkerEnabled,
+            boolean evolveUsingName)
     {
         this.metastoreProvider = requireNonNull(metastoreProvider, "metastore is null");
         this.partitionManager = requireNonNull(partitionManager, "partitionManager is null");
@@ -161,6 +165,7 @@ public class HiveSplitManager
         this.splitLoaderConcurrency = splitLoaderConcurrency;
         this.maxSplitsPerSecond = firstNonNull(maxSplitsPerSecond, Integer.MAX_VALUE);
         this.recursiveDfsWalkerEnabled = recursiveDfsWalkerEnabled;
+        this.evolveUsingName = evolveUsingName;
     }
 
     @Override
@@ -271,7 +276,7 @@ public class HiveSplitManager
         if (hivePartitions.size() == 1) {
             HivePartition firstPartition = getOnlyElement(hivePartitions);
             if (firstPartition.getPartitionId().equals(UNPARTITIONED_ID)) {
-                return ImmutableList.of(new HivePartitionMetadata(firstPartition, Optional.empty(), ImmutableMap.of()));
+                return ImmutableList.of(new HivePartitionMetadata(firstPartition, Optional.empty(), TableToPartitionMappings.createIdentityMapping(table)));
             }
         }
 
@@ -310,36 +315,40 @@ public class HiveSplitManager
                     throw new HiveNotReadableException(tableName, Optional.of(partName), partitionNotReadable);
                 }
 
+                // TODO update the below comment
                 // Verify that the partition schema matches the table schema.
                 // Either adding or dropping columns from the end of the table
                 // without modifying existing partitions is allowed, but every
                 // column that exists in both the table and partition must have
                 // the same type.
-                List<Column> tableColumns = table.getDataColumns();
-                List<Column> partitionColumns = partition.getColumns();
+                List<HiveColumnHandle> tableColumns = HiveUtil.getRegularColumnHandles(table);
+                List<HiveColumnHandle> partitionColumns = HiveUtil.getRegularColumnHandles(partition);
                 if ((tableColumns == null) || (partitionColumns == null)) {
                     throw new PrestoException(HIVE_INVALID_METADATA, format("Table '%s' or partition '%s' has null columns", tableName, partName));
                 }
-                ImmutableMap.Builder<Integer, HiveTypeName> columnCoercions = ImmutableMap.builder();
-                for (int i = 0; i < min(partitionColumns.size(), tableColumns.size()); i++) {
-                    HiveType tableType = tableColumns.get(i).getType();
-                    HiveType partitionType = partitionColumns.get(i).getType();
-                    if (!tableType.equals(partitionType)) {
-                        if (!coercionPolicy.canCoerce(partitionType, tableType)) {
-                            throw new PrestoException(HIVE_PARTITION_SCHEMA_MISMATCH, format("" +
-                                            "There is a mismatch between the table and partition schemas. " +
-                                            "The types are incompatible and cannot be coerced. " +
-                                            "The column '%s' in table '%s' is declared as type '%s', " +
-                                            "but partition '%s' declared column '%s' as type '%s'.",
-                                    tableColumns.get(i).getName(),
-                                    tableName,
-                                    tableType,
-                                    partName,
-                                    partitionColumns.get(i).getName(),
-                                    partitionType));
-                        }
-                        columnCoercions.put(i, partitionType.getHiveTypeName());
+                ImmutableMap<Integer, Integer> tableToPartitionMapping = evolveUsingName ? supportReorderMap(tableColumns, partitionColumns) : supportRenameMap(tableColumns, partitionColumns);
+                ImmutableMap.Builder<Integer, HiveType> columnCoercions = ImmutableMap.builder();
+                for (int i = 0; i < tableColumns.size(); i++) {
+                    HiveType tableType = tableColumns.get(i).getHiveType();
+                    if (!tableToPartitionMapping.containsKey(i)) {
+                        continue;
                     }
+                    int partitionIndex = tableToPartitionMapping.get(i);
+                    HiveType partitionType = partitionColumns.get(partitionIndex).getHiveType();
+                    if (!tableType.equals(partitionType) && !coercionPolicy.canCoerce(partitionType, tableType)) {
+                        throw new PrestoException(HIVE_PARTITION_SCHEMA_MISMATCH, format("" +
+                                        "There is a mismatch between the table and partition schemas. " +
+                                        "The types are incompatible and cannot be coerced. " +
+                                        "The column '%s' in table '%s' is declared as type '%s', " +
+                                        "but partition '%s' declared column '%s' as type '%s'.",
+                                tableColumns.get(i).getName(),
+                                tableName,
+                                tableType,
+                                partName,
+                                partitionColumns.get(partitionIndex).getName(),
+                                partitionType));
+                    }
+                    columnCoercions.put(i, partitionType);
                 }
 
                 if (bucketProperty.isPresent()) {
@@ -366,12 +375,43 @@ public class HiveSplitManager
                     }
                 }
 
-                results.add(new HivePartitionMetadata(hivePartition, Optional.of(partition), columnCoercions.build()));
+                ImmutableMap<Integer, HiveType> coercions = columnCoercions.build();
+                TableToPartitionMappings tableToPartitionMappings = new TableToPartitionMappings(tableToPartitionMapping, coercions);
+                results.add(new HivePartitionMetadata(hivePartition, Optional.of(partition), tableToPartitionMappings));
             }
 
             return results.build();
         });
         return concat(partitionBatches);
+    }
+
+    private ImmutableMap<Integer, Integer> supportRenameMap(List<HiveColumnHandle> tableColumns, List<HiveColumnHandle> partitionColumns)
+    {
+        ImmutableMap.Builder<Integer, Integer> tableToPartition = ImmutableMap.builder();
+        for (int i = 0; i < min(partitionColumns.size(), tableColumns.size()); i++) {
+            tableToPartition.put(i, i);
+        }
+        return tableToPartition.build();
+    }
+
+    private ImmutableMap<Integer, Integer> supportReorderMap(List<HiveColumnHandle> tableColumns, List<HiveColumnHandle> partitionColumns)
+    {
+        ImmutableMap.Builder<String, Integer> nameIndex = ImmutableMap.builder();
+        for (int i = 0; i < partitionColumns.size(); i++) {
+            nameIndex.put(partitionColumns.get(i).getName().toLowerCase(Locale.US), i);
+        }
+        // TODO rename
+        ImmutableMap<String, Integer> integerImmutableMap = nameIndex.build();
+        ImmutableMap.Builder<Integer, Integer> tableToPartition = ImmutableMap.builder();
+        for (int i = 0; i < tableColumns.size(); i++) {
+            // The table may have columns that the partition doesn't
+            Integer value = integerImmutableMap.get(tableColumns.get(i).getName().toLowerCase(Locale.US));
+            if (value == null) {
+                continue;
+            }
+            tableToPartition.put(i, value);
+        }
+        return tableToPartition.build();
     }
 
     static boolean isBucketCountCompatible(int tableBucketCount, int partitionBucketCount)

@@ -159,6 +159,7 @@ public class HiveConfig
     private Duration fileStatusCacheExpireAfterWrite = new Duration(1, TimeUnit.MINUTES);
     private long fileStatusCacheMaxSize = 1000 * 1000;
     private List<String> fileStatusCacheTables = ImmutableList.of();
+    private boolean isEvolveByName;
 
     public int getMaxInitialSplits()
     {
@@ -948,6 +949,19 @@ public class HiveConfig
     public HiveConfig setFileStatusCacheExpireAfterWrite(Duration fileStatusCacheExpireAfterWrite)
     {
         this.fileStatusCacheExpireAfterWrite = fileStatusCacheExpireAfterWrite;
+        return this;
+    }
+
+    public boolean isEvolveByName()
+    {
+        return this.isEvolveByName;
+    }
+
+    @Config("hive.evolve.by.name")
+    @ConfigDescription("Should schema evolution be done by name. This controls evolution happening within the Hive layer. For evolution between files and partitions, use hive.orc.use-column-names and hive.parquet.use-column-names as appropriate.")
+    public HiveConfig setEvolveByName(boolean isEvolveByName)
+    {
+        this.isEvolveByName = isEvolveByName;
         return this;
     }
 

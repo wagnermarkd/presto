@@ -311,7 +311,7 @@ public class TestBackgroundHiveSplitLoader
                         new HivePartitionMetadata(
                                 new HivePartition(new SchemaTableName("testSchema", "table_name")),
                                 Optional.empty(),
-                                ImmutableMap.of()));
+                                TableToPartitionMappings.createIdentityMapping(table)));
 
         ConnectorSession connectorSession = new TestingConnectorSession(
                 new HiveSessionProperties(new HiveConfig().setMaxSplitSize(new DataSize(1.0, GIGABYTE)), new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
@@ -327,7 +327,7 @@ public class TestBackgroundHiveSplitLoader
                 new CachingDirectoryLister(new HiveConfig()),
                 EXECUTOR,
                 2,
-                false);
+                false, false);
     }
 
     private static BackgroundHiveSplitLoader backgroundHiveSplitLoader(List<LocatedFileStatus> files, DirectoryLister directoryLister)
@@ -336,7 +336,7 @@ public class TestBackgroundHiveSplitLoader
                 new HivePartitionMetadata(
                         new HivePartition(new SchemaTableName("testSchema", "table_name")),
                         Optional.empty(),
-                        ImmutableMap.of()));
+                        new TableToPartitionMappings(ImmutableMap.of(1, 1), ImmutableMap.of(1, HIVE_INT))));
 
         ConnectorSession connectorSession = new TestingConnectorSession(
                 new HiveSessionProperties(new HiveConfig().setMaxSplitSize(new DataSize(1.0, GIGABYTE)), new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
@@ -362,7 +362,7 @@ public class TestBackgroundHiveSplitLoader
 
         return new BackgroundHiveSplitLoader(
                 SIMPLE_TABLE,
-                createPartitionMetadataWithOfflinePartitions(),
+                createPartitionMetadataWithOfflinePartitions(SIMPLE_TABLE),
                 TupleDomain.all(),
                 createBucketSplitInfo(Optional.empty(), Optional.empty()),
                 connectorSession,
@@ -374,7 +374,7 @@ public class TestBackgroundHiveSplitLoader
                 false);
     }
 
-    private static Iterable<HivePartitionMetadata> createPartitionMetadataWithOfflinePartitions()
+    private static Iterable<HivePartitionMetadata> createPartitionMetadataWithOfflinePartitions(Table table)
             throws RuntimeException
     {
         return () -> new AbstractIterator<HivePartitionMetadata>()
@@ -392,7 +392,7 @@ public class TestBackgroundHiveSplitLoader
                         return new HivePartitionMetadata(
                                 new HivePartition(new SchemaTableName("testSchema", "table_name")),
                                 Optional.empty(),
-                                ImmutableMap.of());
+                                TableToPartitionMappings.createIdentityMapping(table));
                     case 1:
                         throw new RuntimeException("OFFLINE");
                     default:

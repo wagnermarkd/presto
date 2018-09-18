@@ -21,7 +21,6 @@ import io.prestosql.spi.HostAddress;
 import io.prestosql.spi.connector.ConnectorSplit;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -47,9 +46,9 @@ public class HiveSplit
     private final String partitionName;
     private final OptionalInt bucketNumber;
     private final boolean forceLocalScheduling;
-    private final Map<Integer, HiveType> columnCoercions; // key: hiveColumnIndex
     private final Optional<BucketConversion> bucketConversion;
     private final boolean s3SelectPushdownEnabled;
+    private final TableToPartitionMappings tableToPartitionMappings;
 
     @JsonCreator
     public HiveSplit(
@@ -66,9 +65,9 @@ public class HiveSplit
             @JsonProperty("addresses") List<HostAddress> addresses,
             @JsonProperty("bucketNumber") OptionalInt bucketNumber,
             @JsonProperty("forceLocalScheduling") boolean forceLocalScheduling,
-            @JsonProperty("columnCoercions") Map<Integer, HiveType> columnCoercions,
             @JsonProperty("bucketConversion") Optional<BucketConversion> bucketConversion,
-            @JsonProperty("s3SelectPushdownEnabled") boolean s3SelectPushdownEnabled)
+            @JsonProperty("s3SelectPushdownEnabled") boolean s3SelectPushdownEnabled,
+            @JsonProperty("tableToPartitionMappings") TableToPartitionMappings tableToPartitionMappings)
     {
         checkArgument(start >= 0, "start must be positive");
         checkArgument(length >= 0, "length must be positive");
@@ -81,8 +80,8 @@ public class HiveSplit
         requireNonNull(partitionKeys, "partitionKeys is null");
         requireNonNull(addresses, "addresses is null");
         requireNonNull(bucketNumber, "bucketNumber is null");
-        requireNonNull(columnCoercions, "columnCoercions is null");
         requireNonNull(bucketConversion, "bucketConversion is null");
+        requireNonNull(tableToPartitionMappings, "tableToPartitionMappings is null");
 
         this.database = database;
         this.table = table;
@@ -97,9 +96,9 @@ public class HiveSplit
         this.addresses = ImmutableList.copyOf(addresses);
         this.bucketNumber = bucketNumber;
         this.forceLocalScheduling = forceLocalScheduling;
-        this.columnCoercions = columnCoercions;
         this.bucketConversion = bucketConversion;
         this.s3SelectPushdownEnabled = s3SelectPushdownEnabled;
+        this.tableToPartitionMappings = tableToPartitionMappings;
     }
 
     @JsonProperty
@@ -182,15 +181,15 @@ public class HiveSplit
     }
 
     @JsonProperty
-    public Map<Integer, HiveType> getColumnCoercions()
-    {
-        return columnCoercions;
-    }
-
-    @JsonProperty
     public Optional<BucketConversion> getBucketConversion()
     {
         return bucketConversion;
+    }
+
+    @JsonProperty
+    public TableToPartitionMappings getTableToPartitionMappings()
+    {
+        return tableToPartitionMappings;
     }
 
     @Override

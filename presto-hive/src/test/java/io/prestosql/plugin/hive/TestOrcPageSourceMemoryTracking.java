@@ -15,7 +15,6 @@ package io.prestosql.plugin.hive;
 
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.slice.Slice;
 import io.airlift.stats.Distribution;
@@ -486,8 +485,9 @@ public class TestOrcPageSourceMemoryTracking
                     partitionKeys,
                     DateTimeZone.UTC,
                     TYPE_MANAGER,
-                    ImmutableMap.of(),
                     Optional.empty(),
+                    false,
+                    TableToPartitionMappings.createIdentityMapping(columns),
                     false)
                     .get();
         }

@@ -60,7 +60,6 @@ public final class MetastoreUtil
         return getHiveSchema(
                 table.getStorage(),
                 table.getDataColumns(),
-                table.getDataColumns(),
                 table.getParameters(),
                 table.getDatabaseName(),
                 table.getTableName(),
@@ -73,7 +72,6 @@ public final class MetastoreUtil
         return getHiveSchema(
                 partition.getStorage(),
                 partition.getColumns(),
-                table.getDataColumns(),
                 table.getParameters(),
                 table.getDatabaseName(),
                 table.getTableName(),
@@ -83,7 +81,6 @@ public final class MetastoreUtil
     private static Properties getHiveSchema(
             Storage sd,
             List<Column> dataColumns,
-            List<Column> tableDataColumns,
             Map<String, String> parameters,
             String databaseName,
             String tableName,
@@ -117,7 +114,7 @@ public final class MetastoreUtil
         StringBuilder columnTypeBuilder = new StringBuilder();
         StringBuilder columnCommentBuilder = new StringBuilder();
         boolean first = true;
-        for (Column column : tableDataColumns) {
+        for (Column column : dataColumns) {
             if (!first) {
                 columnNameBuilder.append(",");
                 columnTypeBuilder.append(":");

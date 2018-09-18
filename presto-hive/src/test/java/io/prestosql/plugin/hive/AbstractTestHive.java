@@ -393,16 +393,18 @@ public abstract class AbstractTestHive
             .add(new ColumnMetadata("varchar_to_drop_in_row", createUnboundedVarcharType()))
             .build();
 
-    private static final Type MISMATCH_SCHEMA_ROW_TYPE_APPEND = toRowType(ImmutableList.<ColumnMetadata>builder()
+    private static final Type MISMATCH_SCHEMA_ROW_TYPE_PREPEND_APPEND = toRowType(ImmutableList.<ColumnMetadata>builder()
+            .add(new ColumnMetadata(format("%s_prepend", MISMATCH_SCHEMA_PRIMITIVE_COLUMN_AFTER.get(0).getName()), MISMATCH_SCHEMA_PRIMITIVE_COLUMN_AFTER.get(0).getType()))
             .addAll(MISMATCH_SCHEMA_PRIMITIVE_COLUMN_AFTER)
             .add(new ColumnMetadata(format("%s_append", MISMATCH_SCHEMA_PRIMITIVE_COLUMN_AFTER.get(0).getName()), MISMATCH_SCHEMA_PRIMITIVE_COLUMN_AFTER.get(0).getType()))
             .build());
     private static final Type MISMATCH_SCHEMA_ROW_TYPE_DROP = toRowType(MISMATCH_SCHEMA_PRIMITIVE_COLUMN_AFTER.subList(0, MISMATCH_SCHEMA_PRIMITIVE_COLUMN_AFTER.size() - 1));
 
     private static final List<ColumnMetadata> MISMATCH_SCHEMA_TABLE_AFTER = ImmutableList.<ColumnMetadata>builder()
+            .add(new ColumnMetadata("prepend_int", INTEGER))
             .addAll(MISMATCH_SCHEMA_PRIMITIVE_COLUMN_AFTER)
-            .add(new ColumnMetadata("struct_to_struct", MISMATCH_SCHEMA_ROW_TYPE_APPEND))
-            .add(new ColumnMetadata("list_to_list", arrayType(MISMATCH_SCHEMA_ROW_TYPE_APPEND)))
+            .add(new ColumnMetadata("struct_to_struct", MISMATCH_SCHEMA_ROW_TYPE_PREPEND_APPEND))
+            .add(new ColumnMetadata("list_to_list", arrayType(MISMATCH_SCHEMA_ROW_TYPE_PREPEND_APPEND)))
             .add(new ColumnMetadata("map_to_map", mapType(MISMATCH_SCHEMA_PRIMITIVE_COLUMN_AFTER.get(1).getType(), MISMATCH_SCHEMA_ROW_TYPE_DROP)))
             .add(new ColumnMetadata("ds", createUnboundedVarcharType()))
             .build();
@@ -422,12 +424,14 @@ public abstract class AbstractTestHive
                             .map(materializedRow -> {
                                 List<Object> result = materializedRow.getFields();
                                 List<Object> appendFieldRowResult = materializedRow.getFields();
+                                appendFieldRowResult.add(0, null);
                                 appendFieldRowResult.add(null);
                                 List<Object> dropFieldRowResult = materializedRow.getFields().subList(0, materializedRow.getFields().size() - 1);
                                 result.add(appendFieldRowResult);
                                 result.add(Arrays.asList(appendFieldRowResult, null, appendFieldRowResult));
                                 result.add(ImmutableMap.of(result.get(1), dropFieldRowResult));
                                 result.add(result.get(9));
+                                result.add(0, null);
                                 return new MaterializedRow(materializedRow.getPrecision(), result);
                             }).collect(toList()))
                     .build();
@@ -710,6 +714,7 @@ public abstract class AbstractTestHive
 
     protected final void setup(String databaseName, HiveConfig hiveConfig, HiveMetastore hiveMetastore)
     {
+        hiveConfig.setEvolveByName(true);
         setupHive(databaseName, hiveConfig.getTimeZone());
 
         metastoreClient = hiveMetastore;
@@ -743,9 +748,9 @@ public abstract class AbstractTestHive
                 partitionManager,
                 new NamenodeStats(),
                 hdfsEnvironment,
-                new CachingDirectoryLister(new HiveConfig()),
+                new CachingDirectoryLister(hiveConfig),
                 directExecutor(),
-                new HiveCoercionPolicy(TYPE_MANAGER),
+                new HiveCoercionPolicy(hiveConfig, TYPE_MANAGER),
                 new CounterStat(),
                 100,
                 hiveConfig.getMaxOutstandingSplitsSize(),
@@ -754,7 +759,8 @@ public abstract class AbstractTestHive
                 hiveConfig.getMaxInitialSplits(),
                 hiveConfig.getSplitLoaderConcurrency(),
                 hiveConfig.getMaxSplitsPerSecond(),
-                false);
+                false,
+                hiveConfig.isEvolveByName());
         pageSinkProvider = new HivePageSinkProvider(
                 getDefaultHiveFileWriterFactories(hiveConfig),
                 hdfsEnvironment,
@@ -4213,16 +4219,13 @@ public abstract class AbstractTestHive
 
     protected static void assertPageSourceType(ConnectorPageSource pageSource, HiveStorageFormat hiveStorageFormat)
     {
-        if (pageSource instanceof RecordPageSource) {
-            RecordCursor hiveRecordCursor = ((RecordPageSource) pageSource).getCursor();
-            hiveRecordCursor = ((HiveRecordCursor) hiveRecordCursor).getRegularColumnRecordCursor();
-            if (hiveRecordCursor instanceof HiveCoercionRecordCursor) {
-                hiveRecordCursor = ((HiveCoercionRecordCursor) hiveRecordCursor).getRegularColumnRecordCursor();
-            }
-            assertInstanceOf(hiveRecordCursor, recordCursorType(hiveStorageFormat), hiveStorageFormat.name());
+        ConnectorPageSource innerSource = ((HivePartitionAdapatingPageSource) pageSource).getPageSource();
+        if (innerSource instanceof RecordPageSource) {
+            RecordCursor recordCursor = ((RecordPageSource) innerSource).getCursor();
+            assertInstanceOf(recordCursor, recordCursorType(hiveStorageFormat), hiveStorageFormat.name());
         }
         else {
-            assertInstanceOf(((HivePageSource) pageSource).getPageSource(), pageSourceType(hiveStorageFormat), hiveStorageFormat.name());
+            assertInstanceOf(innerSource, pageSourceType(hiveStorageFormat), hiveStorageFormat.name());
         }
     }
 

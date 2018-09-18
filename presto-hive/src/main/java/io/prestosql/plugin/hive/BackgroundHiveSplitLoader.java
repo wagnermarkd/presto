@@ -323,10 +323,10 @@ public class BackgroundHiveSplitLoader
                         schema,
                         partitionKeys,
                         effectivePredicate,
-                        partition.getColumnCoercions(),
                         Optional.empty(),
                         isForceLocalScheduling(session),
-                        s3SelectPushdownEnabled);
+                        s3SelectPushdownEnabled,
+                        partition.getTableToPartitionMappings());
                 lastResult = addSplitsToSource(targetSplits, splitFactory);
                 if (stopped) {
                     return COMPLETED_FUTURE;
@@ -359,10 +359,10 @@ public class BackgroundHiveSplitLoader
                 schema,
                 partitionKeys,
                 effectivePredicate,
-                partition.getColumnCoercions(),
                 bucketConversionRequiresWorkerParticipation ? bucketConversion : Optional.empty(),
                 isForceLocalScheduling(session),
-                s3SelectPushdownEnabled);
+                s3SelectPushdownEnabled,
+                partition.getTableToPartitionMappings());
 
         // To support custom input formats, we want to call getSplits()
         // on the input format to obtain file splits.
@@ -428,6 +428,7 @@ public class BackgroundHiveSplitLoader
         int tableBucketCount = bucketSplitInfo.getTableBucketCount();
         int partitionBucketCount = bucketConversion.map(BucketConversion::getPartitionBucketCount).orElse(tableBucketCount);
         int bucketCount = max(readBucketCount, partitionBucketCount);
+        // TODO Check one is a multiple of the other
 
         // list all files in the partition
         List<LocatedFileStatus> files = new ArrayList<>(partitionBucketCount);

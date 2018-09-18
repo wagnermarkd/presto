@@ -241,6 +241,7 @@ public class OrcPageSourceFactory
         return format("Error opening Hive split %s (offset=%s, length=%s): %s", path, start, length, t.getMessage());
     }
 
+    // TODO: mwagner this is currently handled by a different config than the table <-> partition mapping. Is that the right choice?
     private static List<HiveColumnHandle> getPhysicalHiveColumnHandles(List<HiveColumnHandle> columns, boolean useOrcColumnNames, OrcReader reader, Path path)
     {
         if (!useOrcColumnNames) {

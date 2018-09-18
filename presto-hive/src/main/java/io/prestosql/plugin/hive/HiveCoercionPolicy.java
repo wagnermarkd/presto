@@ -25,6 +25,7 @@ import org.apache.hadoop.hive.serde2.typeinfo.StructTypeInfo;
 import javax.inject.Inject;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 import static io.prestosql.plugin.hive.HiveType.HIVE_BYTE;
 import static io.prestosql.plugin.hive.HiveType.HIVE_DOUBLE;
@@ -40,11 +41,13 @@ public class HiveCoercionPolicy
         implements CoercionPolicy
 {
     private final TypeManager typeManager;
+    private final HiveConfig config;
 
     @Inject
-    public HiveCoercionPolicy(TypeManager typeManager)
+    public HiveCoercionPolicy(HiveConfig hiveConfig, TypeManager typeManager)
     {
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
+        this.config = requireNonNull(hiveConfig, "hiveConfig is null");
     }
 
     @Override
@@ -108,6 +111,42 @@ public class HiveCoercionPolicy
         if (!fromHiveType.getCategory().equals(Category.STRUCT) || !toHiveType.getCategory().equals(Category.STRUCT)) {
             return false;
         }
+
+        if (config.isEvolveByName()) {
+            return canCoerceForStructByName(fromHiveType, toHiveType);
+        }
+        else {
+            return canCoerceForStructByPosition(fromHiveType, toHiveType);
+        }
+    }
+
+    private boolean canCoerceForStructByName(HiveType fromHiveType, HiveType toHiveType)
+    {
+        // Lowercase everything to do case insensitive comparison
+        List<String> fromFieldNames = ((StructTypeInfo) fromHiveType.getTypeInfo()).getAllStructFieldNames().stream().map(String::toLowerCase).collect(Collectors.toList());
+        List<String> toFieldNames = ((StructTypeInfo) toHiveType.getTypeInfo()).getAllStructFieldNames().stream().map(String::toLowerCase).collect(Collectors.toList());
+        List<HiveType> fromFieldTypes = extractStructFieldTypes(fromHiveType);
+        List<HiveType> toFieldTypes = extractStructFieldTypes(toHiveType);
+
+        for (int i = 0; i < toFieldNames.size(); i++) {
+            int sourceIndex = fromFieldNames.indexOf(toFieldNames.get(i));
+            // Fields that aren't in the source will be null
+            if (sourceIndex == -1) {
+                continue;
+            }
+            HiveType fromType = fromFieldTypes.get(sourceIndex);
+            HiveType toType = toFieldTypes.get(i);
+            if (fromType.equals(toType) || canCoerce(fromType, toType)) {
+                continue;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    private boolean canCoerceForStructByPosition(HiveType fromHiveType, HiveType toHiveType)
+    {
         List<String> fromFieldNames = ((StructTypeInfo) fromHiveType.getTypeInfo()).getAllStructFieldNames();
         List<String> toFieldNames = ((StructTypeInfo) toHiveType.getTypeInfo()).getAllStructFieldNames();
         List<HiveType> fromFieldTypes = extractStructFieldTypes(fromHiveType);

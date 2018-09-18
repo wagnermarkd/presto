@@ -31,6 +31,7 @@ import io.prestosql.plugin.hive.HivePartitionKey;
 import io.prestosql.plugin.hive.HiveType;
 import io.prestosql.plugin.hive.avro.PrestoAvroSerDe;
 import io.prestosql.plugin.hive.metastore.Column;
+import io.prestosql.plugin.hive.metastore.Partition;
 import io.prestosql.plugin.hive.metastore.Table;
 import io.prestosql.spi.ErrorCodeSupplier;
 import io.prestosql.spi.PrestoException;
@@ -853,10 +854,21 @@ public final class HiveUtil
 
     public static List<HiveColumnHandle> getRegularColumnHandles(Table table)
     {
+        return getRegularColumnHandles(table.getDataColumns());
+    }
+
+    public static List<HiveColumnHandle> getRegularColumnHandles(Partition partition)
+    {
+        return getRegularColumnHandles(partition.getColumns());
+    }
+
+    private static List<HiveColumnHandle> getRegularColumnHandles(List<Column> dataColumns)
+    {
         ImmutableList.Builder<HiveColumnHandle> columns = ImmutableList.builder();
 
+        // TODO: come back for schema evolution in case of non-metastore described tables
         int hiveColumnIndex = 0;
-        for (Column field : table.getDataColumns()) {
+        for (Column field : dataColumns) {
             // ignore unsupported types rather than failing
             HiveType hiveType = field.getType();
             if (hiveType.isSupportedType()) {

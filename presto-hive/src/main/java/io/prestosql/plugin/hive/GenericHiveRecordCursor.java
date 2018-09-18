@@ -139,6 +139,7 @@ class GenericHiveRecordCursor<K, V extends Writable>
         this.hiveStorageTimeZone = hiveStorageTimeZone;
 
         this.deserializer = getDeserializer(configuration, splitSchema);
+        // TODO: change to getObjectInspector?
         this.rowInspector = getTableObjectInspector(deserializer);
 
         int size = columns.size();

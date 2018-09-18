@@ -18,7 +18,6 @@ import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
-import io.airlift.slice.Slice;
 import io.airlift.units.DataSize;
 import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HiveConfig;
@@ -35,17 +34,6 @@ import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.connector.RecordCursor;
-import io.prestosql.spi.connector.RecordPageSource;
-import io.prestosql.spi.type.ArrayType;
-import io.prestosql.spi.type.DateType;
-import io.prestosql.spi.type.DecimalType;
-import io.prestosql.spi.type.MapType;
-import io.prestosql.spi.type.SqlDate;
-import io.prestosql.spi.type.SqlDecimal;
-import io.prestosql.spi.type.SqlTimestamp;
-import io.prestosql.spi.type.SqlVarbinary;
-import io.prestosql.spi.type.TimestampType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.testing.TestingConnectorSession;
 import org.apache.hadoop.fs.Path;
@@ -68,7 +56,6 @@ import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -83,16 +70,8 @@ import java.util.function.Function;
 import static com.google.common.base.Functions.constant;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.Iterables.transform;
-import static io.prestosql.plugin.hive.AbstractTestHiveFileFormats.getFieldFromCursor;
 import static io.prestosql.plugin.hive.HiveSessionProperties.getParquetMaxReadBlockSize;
 import static io.prestosql.plugin.hive.HiveTestUtils.createTestHdfsEnvironment;
-import static io.prestosql.plugin.hive.util.HiveUtil.isArrayType;
-import static io.prestosql.plugin.hive.util.HiveUtil.isMapType;
-import static io.prestosql.plugin.hive.util.HiveUtil.isRowType;
-import static io.prestosql.plugin.hive.util.HiveUtil.isStructuralType;
-import static io.prestosql.spi.type.TimeZoneKey.UTC_KEY;
-import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
-import static io.prestosql.spi.type.Varchars.isVarcharType;
 import static java.util.Arrays.stream;
 import static java.util.Collections.singletonList;
 import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspectorFactory.getStandardStructObjectInspector;
@@ -390,12 +369,7 @@ public class ParquetTester
                 dataFile,
                 columnNames,
                 columnTypes)) {
-            if (pageSource instanceof RecordPageSource) {
-                assertRecordCursor(columnTypes, expectedValues, ((RecordPageSource) pageSource).getCursor());
-            }
-            else {
-                assertPageSource(columnTypes, expectedValues, pageSource);
-            }
+            assertPageSource(columnTypes, expectedValues, pageSource);
             assertFalse(stream(expectedValues).allMatch(Iterator::hasNext));
         }
     }
@@ -428,58 +402,7 @@ public class ParquetTester
         }
     }
 
-    private static void assertRecordCursor(List<Type> types, Iterator<?>[] valuesByField, RecordCursor cursor)
-    {
-        while (cursor.advanceNextPosition()) {
-            for (int field = 0; field < types.size(); field++) {
-                assertTrue(valuesByField[field].hasNext());
-                Object expected = valuesByField[field].next();
-                Object actual = getActualCursorValue(cursor, types.get(field), field);
-                assertEquals(actual, expected);
-            }
-        }
-    }
-
-    private static Object getActualCursorValue(RecordCursor cursor, Type type, int field)
-    {
-        Object fieldFromCursor = getFieldFromCursor(cursor, type, field);
-        if (fieldFromCursor == null) {
-            return null;
-        }
-        if (isStructuralType(type)) {
-            Block block = (Block) fieldFromCursor;
-            if (isArrayType(type)) {
-                Type elementType = ((ArrayType) type).getElementType();
-                return toArrayValue(block, elementType);
-            }
-            if (isMapType(type)) {
-                MapType mapType = (MapType) type;
-                return toMapValue(block, mapType.getKeyType(), mapType.getValueType());
-            }
-            if (isRowType(type)) {
-                return toRowValue(block, type.getTypeParameters());
-            }
-        }
-        if (type instanceof DecimalType) {
-            DecimalType decimalType = (DecimalType) type;
-            return new SqlDecimal((BigInteger) fieldFromCursor, decimalType.getPrecision(), decimalType.getScale());
-        }
-        if (isVarcharType(type)) {
-            return new String(((Slice) fieldFromCursor).getBytes());
-        }
-        if (VARBINARY.equals(type)) {
-            return new SqlVarbinary(((Slice) fieldFromCursor).getBytes());
-        }
-        if (DateType.DATE.equals(type)) {
-            return new SqlDate(((Long) fieldFromCursor).intValue());
-        }
-        if (TimestampType.TIMESTAMP.equals(type)) {
-            return new SqlTimestamp((long) fieldFromCursor, UTC_KEY);
-        }
-        return fieldFromCursor;
-    }
-
-    private static Map<?, ?> toMapValue(Block mapBlock, Type keyType, Type valueType)
+    private static Map toMapValue(Block mapBlock, Type keyType, Type valueType)
     {
         Map<Object, Object> map = new HashMap<>(mapBlock.getPositionCount() * 2);
         for (int i = 0; i < mapBlock.getPositionCount(); i += 2) {

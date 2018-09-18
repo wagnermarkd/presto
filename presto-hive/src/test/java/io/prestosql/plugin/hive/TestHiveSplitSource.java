@@ -306,9 +306,9 @@ public class TestHiveSplitSource
                     bucketNumber,
                     true,
                     false,
-                    ImmutableMap.of(),
                     Optional.empty(),
-                    false);
+                    false,
+                    new TableToPartitionMappings(ImmutableMap.of(), ImmutableMap.of()));
         }
 
         private static Properties properties(String key, String value)
